@@ -58,22 +58,3 @@ Or
 ```
 python main.py config=dnerf_slim.yaml systems.ckpt="checkpoint/path" render_only=True
 ```
-
-
-# Acknowledgement
-Toyota Research Institute provided funds to support this work but this article solely reflects the opinions and conclusions of its authors and not TRI or any other Toyota entity. We thank Shengyi Qian for the title suggestion, David Fouhey, Mohamed El Banani, Ziyang Chen, Linyi Jin and for helpful discussions and feedbacks.
-
-Our code is hugely influenced by [TensoRF](https://github.com/apchenstu/TensoRF) and many other projects.
-We would like to acknowledge them for making great code openly available for us to use.
-
-
-
-If you find this code useful, please consider citing:
-```
-    @article{Cao2023HexPlane,
-    author    = {Cao, Ang and Johnson, Justin},
-    title     = {HexPlane: A Fast Representation for Dynamic Scenes},
-    journal   = {CVPR},
-    year      = {2023},
-    }
-```
