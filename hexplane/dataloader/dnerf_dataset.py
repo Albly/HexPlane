@@ -7,6 +7,9 @@ from PIL import Image
 from torch.utils.data import Dataset
 from torchvision import transforms as T
 from tqdm import tqdm
+import liblzfse
+import scipy
+
 
 from .ray_utils import get_ray_directions_blender, get_rays, read_pfm
 
@@ -72,16 +75,18 @@ class DNerfDataset(Dataset):
         self.root_dir = datadir
         self.split = split
         self.downsample = downsample
-        self.img_wh = (int(800 / downsample), int(800 / downsample))
+        # self.img_wh = (int(800 / downsample), int(800 / downsample))
+        # todo change wh
         self.is_stack = is_stack
         self.N_vis = N_vis  # evaluate images for every N_vis images
 
         self.time_scale = time_scale
         self.world_bound_scale = 1.1
 
-        self.near = 2.0
-        self.far = 6.0
-        self.near_far = [2.0, 6.0]
+        self.near = 1e-3
+        self.far = 2.0
+        self.near_far = [self.near, self.far]
+        # todo change near to 0 change far?
 
         self.define_transforms()  # transform to torch.Tensor
 
@@ -89,6 +94,7 @@ class DNerfDataset(Dataset):
         self.blender2opencv = np.array(
             [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]
         )
+        # todo possible fix it?
 
         self.read_meta()  # Read meta data
 
@@ -101,7 +107,7 @@ class DNerfDataset(Dataset):
 
         self.white_bg = True
         self.ndc_ray = False
-        self.depth_data = False
+        self.depth_data = True
 
         self.N_random_pose = N_random_pose
         self.center = torch.mean(self.scene_bbox, axis=0).float().view(1, 1, 3)
@@ -152,10 +158,20 @@ class DNerfDataset(Dataset):
         depth = np.array(read_pfm(filename)[0], dtype=np.float32)  # (800, 800)
         return depth
 
+    def read_depth_file(self, filename):
+        fh = open(filename, "rb")
+        compressed = fh.read()
+        decompressed_bytes = liblzfse.decompress(compressed)
+        depth_img = np.frombuffer(decompressed_bytes, dtype=np.float32).reshape((256, 192)) 
+        XX = scipy.ndimage.zoom(np.nan_to_num(depth_img), 1.875, order = 2)
+        return torch.tensor(XX, dtype = torch.float32)
+
     def read_meta(self):
         with open(os.path.join(self.root_dir, f"transforms_{self.split}.json")) as f:
             self.meta = json.load(f)
-
+        
+        self.img_wh = (int(self.meta["image_size"][0] / self.downsample), int(self.meta["image_size"][1] / self.downsample))
+        
         w, h = self.img_wh
         self.focal = (
             0.5 * 800 / np.tan(0.5 * self.meta["camera_angle_x"])
@@ -163,6 +179,9 @@ class DNerfDataset(Dataset):
         self.focal *= (
             self.img_wh[0] / 800
         )  # modify focal length to match size self.img_wh
+        
+        # todo change focal = focal_json / w
+        #self.focal = self.meta["focal_length"] / w
 
         # ray directions for all pixels, same for all images (same H, W, focal)
         self.directions = get_ray_directions_blender(
@@ -172,15 +191,18 @@ class DNerfDataset(Dataset):
             self.directions, dim=-1, keepdim=True
         )
         self.intrinsics = torch.tensor(
-            [[self.focal, 0, w / 2], [0, self.focal, h / 2], [0, 0, 1]]
+            # [[self.focal, 0, w / 2], [0, self.focal, h / 2], [0, 0, 1]]
+            [[self.focal, 0, self.meta["principal_point"][0]], [0, self.focal, self.meta["principal_point"][1]], [0, 0, 1]]
         ).float()
+        # todo change w/2 to principal point x
+        # todo change for y respectively
 
         self.image_paths = []
         self.poses = []
         self.all_rays = []
         self.all_times = []
         self.all_rgbs = []
-        self.all_depth = []
+        self.all_depths = []
 
         img_eval_interval = (
             1 if self.N_vis < 0 else len(self.meta["frames"]) // self.N_vis
@@ -191,12 +213,35 @@ class DNerfDataset(Dataset):
         ):  # img_list:#
             frame = self.meta["frames"][i]
             pose = np.array(frame["transform_matrix"]) @ self.blender2opencv
+            # todo pose = np.eye(4)
+            # todo R = orientation vs orientation.t()
+            # todo pose[:3, :3] = R @ np.diag([1, -1, -1]) @ np.diag([1, -1, -1])
+            # todo pose[:3, 3] = position
+            # 1
+            # pose = pose
+            # 2
+            # R = pose[:3,:3]
+            # pose[:3,:3] = R.T
+            # 3
+            # pose = pose @ np.diag([1, -1, -1, 1])
+            # 4
+            # R = pose[:3,:3]
+            # pose[:3,:3] = R.T
+            # pose = pose @ np.diag([1, -1, -1, 1])
+
+   
             c2w = torch.FloatTensor(pose)
             self.poses += [c2w]
 
-            image_path = os.path.join(self.root_dir, f"{frame['file_path']}.png")
+            image_path = os.path.join(self.root_dir, f"{frame['file_path']}.jpg")
+
             self.image_paths += [image_path]
-            img = Image.open(image_path)
+            img = Image.open(image_path).convert("RGBA")
+
+            depth_path = os.path.join(self.root_dir, f"{frame['file_path']}.depth")
+            cur_depth = self.read_depth_file(depth_path)
+            cur_depth = cur_depth.view(-1, 1)
+            self.all_depths += [cur_depth]
 
             if self.downsample != 1.0:
                 img = img.resize(self.img_wh, Image.LANCZOS)
@@ -227,6 +272,8 @@ class DNerfDataset(Dataset):
                 self.all_rgbs, 0
             )  # (len(self.meta['frames])*h*w, 3)
             self.all_times = torch.cat(self.all_times, 0)
+            if len(self.all_depths):
+                self.all_depths = torch.cat(self.all_depths, 0)
 
         else:
             self.all_rays = torch.stack(
@@ -236,6 +283,7 @@ class DNerfDataset(Dataset):
                 -1, *self.img_wh[::-1], 3
             )  # (len(self.meta['frames]),h,w,3)
             self.all_times = torch.stack(self.all_times, 0)
+            self.all_depths = torch.stack(self.all_depths, 0).reshape(-1, *self.img_wh[::-1], 1)
 
         self.all_times = self.time_scale * (self.all_times * 2.0 - 1.0)
 
@@ -258,11 +306,14 @@ class DNerfDataset(Dataset):
         """
         render_poses = torch.stack(
             [
-                pose_spherical(angle, -30.0, 4.0)
-                for angle in np.linspace(-180, 180, 40 + 1)[:-1]
+                pose_spherical(angle, ph, 4) for angle,ph in zip(np.linspace(-40, 40, 150 + 1)[:-1],np.linspace(-30, 30, 150 + 1)[:-1])
             ],
             0,
         )
+
+        print('loading render poses')
+        render_poses = torch.load('T_train.pt').type(torch.float32)
+
         render_times = torch.linspace(0.0, 1.0, render_poses.shape[0]) * 2.0 - 1.0
         return render_poses, self.time_scale * render_times
 
@@ -292,6 +343,9 @@ class DNerfDataset(Dataset):
             rays = self.all_rays[idx]
             time = self.all_times[idx]
             sample = {"rays": rays, "rgbs": img, "time": time}
+        
+        if len(self.all_depths):
+            sample['depths'] = self.all_depths[idx]
         return sample
 
     def get_random_pose(self, batch_size, patch_size, batching="all_images"):
