@@ -1,14 +1,9 @@
-# HexPlane: A Fast Representation for Dynamic Scenes. (CVPR 2023)
-This is the code for our CVPR 2023 paper :
+# HexPlane: A Fast Representation for Dynamic Scenes.
+This is based on CVPR 2023 paper:
 [HexPlane: A Fast Representation for Dynamic Scenes](https://caoang327.github.io/HexPlane/)
-
-[Ang Cao](https://caoang327.github.io),
-[Justin Johnson](https://web.eecs.umich.edu/~justincj)
 
 ![image](docs/method.png)
 **HexPlane is an elegant solution to explicitly represent dynamic 3D scenes, decomposing a 4D spacetime grid into six feature planes spanning each pair of coordinate axes (e.g., XY, ZT). It computes a feature vector for a 4D point in spacetime by projecting the point onto each feature plane. then aggregating the six resulting feature vectors. The fused feature vector is then passed to a tiny MLP which predicts the color of the point; novel views can then be rendered via volume rendering.** 
-
-If you have any questions, please feel free to email me at ancao@umich.edu.
 
 # Environment Setup
 ```
